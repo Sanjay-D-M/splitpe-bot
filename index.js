@@ -129,47 +129,17 @@ async function getGroupBalances(group) {
 
 // ─── WHATSAPP CLIENT ───────────────────────────────────────
 
-const { execSync } = require('child_process');
-
-function findChromium() {
-    const paths = [
-        '/run/current-system/sw/bin/chromium',
-        '/usr/bin/chromium',
-        '/usr/bin/chromium-browser',
-        '/nix/var/nix/profiles/default/bin/chromium',
-    ];
-
-    for (const p of paths) {
-        try {
-            execSync(`test -f ${p}`);
-            return p;
-        } catch {}
-    }
-
-    try {
-        return execSync('which chromium').toString().trim();
-    } catch {}
-
-    try {
-        return execSync('which chromium-browser').toString().trim();
-    } catch {}
-
-    return null;
-}
-
-const chromiumPath = findChromium();
-console.log('🔍 Chromium found at:', chromiumPath);
-
 const client = new Client({
     authStrategy: new LocalAuth(),
     puppeteer: {
         headless: true,
-        executablePath: chromiumPath || undefined,
+        executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium',
         args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
             '--disable-dev-shm-usage',
-            '--disable-gpu'
+            '--disable-gpu',
+            '--single-process'
         ]
     }
 });
