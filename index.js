@@ -158,18 +158,17 @@ client.on('ready', () => {
 // HELP
 async function handleHelp(msg) {
     let reply = `👋 *Welcome to SplitPe!*\n`;
-    reply += `━━━━━━━━━━━━━━\n`;
-    reply += `Here's what I can do:\n\n`;
-    reply += `💸 *Split a bill:*\n`;
+    reply += `━━━━━━━━━━━━━━\n\n`;
+    reply += `💸 *Split equally among all:*\n`;
     reply += `@splitpe ₹1240 Rahul paid dinner\n\n`;
+    reply += `👥 *Split with specific people only:*\n`;
+    reply += `@splitpe ₹1240 Rahul paid dinner @Sneha @Aditya\n\n`;
     reply += `📊 *Check balances:*\n`;
     reply += `@splitpe balance\n\n`;
     reply += `📲 *Register your UPI ID:*\n`;
     reply += `@splitpe register Rahul rahul@okaxis\n\n`;
-    reply += `❓ *Show this help:*\n`;
-    reply += `@splitpe help\n`;
     reply += `━━━━━━━━━━━━━━\n`;
-    reply += `_Tip: Register your UPI ID once so others can pay you with one tap_ ✌️`;
+    reply += `_Tip: Tag only the people who shared the expense_ ✌️`;
 
     await msg.reply(reply);
 }
@@ -208,25 +207,56 @@ async function handleRegister(msg, parts) {
 async function handleSplit(msg) {
     const chat = await msg.getChat();
     const groupName = chat.name || 'private';
-    const participants = chat.participants;
-    const count = participants?.length || 2;
-
     const body = msg.body.trim();
+
+    // Parse amount
     const amountMatch = body.match(/₹?(\d+)/);
     const paidMatch = body.match(/(\w+)\s+paid/i);
-    const reasonMatch = body.match(/paid\s+(.+)/i);
+    const reasonMatch = body.match(/paid\s+(.*?)(?:\s+@|$)/i);
 
     if (!amountMatch || !paidMatch) {
-        await msg.reply(`❌ Couldn't understand that.\n\nTry:\n@splitpe ₹1240 Rahul paid dinner\n\nOr type *@splitpe help* to see all commands.`);
+        await msg.reply(
+            `❌ Couldn't understand that.\n\n` +
+            `*Split equally in group:*\n` +
+            `@splitpe ₹1240 Rahul paid dinner\n\n` +
+            `*Split with specific people:*\n` +
+            `@splitpe ₹1240 Rahul paid dinner @Sneha @Aditya\n\n` +
+            `Type *@splitpe help* for all commands.`
+        );
         return;
     }
 
     const amount = parseInt(amountMatch[1]);
     const paidBy = paidMatch[1];
     const reason = reasonMatch ? reasonMatch[1].trim() : 'expense';
-    const perPerson = Math.ceil(amount / count);
 
-    // Try to get real UPI ID
+    // Check if specific people are tagged
+    const taggedPeople = [...body.matchAll(/@(\w+)/g)]
+        .map(m => m[1])
+        .filter(name => name.toLowerCase() !== 'splitpe'); // exclude the bot mention
+
+    let splitNames = [];
+    let count = 0;
+
+    if (taggedPeople.length > 0) {
+        // Use tagged people only
+        splitNames = taggedPeople;
+        count = taggedPeople.length;
+    } else {
+        // Use all group participants except the bot
+        const participants = chat.participants || [];
+        const botNumber = client.info?.wid?.user;
+
+        const humanParticipants = participants.filter(p => {
+            const num = p.id?.user;
+            return num !== botNumber;
+        });
+
+        count = humanParticipants.length || 2;
+        splitNames = []; // we don't have names, just count
+    }
+
+    const perPerson = Math.ceil(amount / count);
     const upiId = await getUPIId(paidBy);
     const upiLink = upiId
         ? `upi://pay?pa=${upiId}&pn=${paidBy}&am=${perPerson}&cu=INR`
@@ -239,16 +269,29 @@ async function handleSplit(msg) {
     let reply = `⚡ *SplitPe*\n`;
     reply += `━━━━━━━━━━━━━━\n`;
     reply += `📋 *${reason.toUpperCase()}* — ₹${amount}\n`;
-    reply += `👥 Split ${count} ways = *₹${perPerson} each*\n`;
-    reply += `━━━━━━━━━━━━━━\n`;
-    reply += `✅ *${paidBy}* paid — collects ₹${amount - perPerson}\n\n`;
-    reply += `💸 *Everyone owes ₹${perPerson}:*\n`;
+
+    if (splitNames.length > 0) {
+        reply += `👥 Split ${count} ways = *₹${perPerson} each*\n`;
+        reply += `━━━━━━━━━━━━━━\n`;
+        reply += `✅ *${paidBy}* paid — collects ₹${amount - perPerson}\n\n`;
+        reply += `💸 *Each person owes ₹${perPerson}:*\n`;
+        splitNames
+            .filter(n => n.toLowerCase() !== paidBy.toLowerCase())
+            .forEach(name => {
+                reply += `  • ${name}\n`;
+            });
+    } else {
+        reply += `👥 Split ${count} ways = *₹${perPerson} each*\n`;
+        reply += `━━━━━━━━━━━━━━\n`;
+        reply += `✅ *${paidBy}* paid — collects ₹${amount - perPerson}\n\n`;
+        reply += `💸 *Everyone owes ₹${perPerson} each*\n`;
+    }
 
     if (upiLink) {
-        reply += `👉 *Pay ${paidBy}:* ${upiLink}\n`;
+        reply += `\n👉 *Pay ${paidBy}:* ${upiLink}\n`;
     } else {
-        reply += `⚠️ ${paidBy} hasn't registered a UPI ID yet.\n`;
-        reply += `Ask them to run: @splitpe register ${paidBy} their@upi\n`;
+        reply += `\n⚠️ *${paidBy}* hasn't registered UPI yet.\n`;
+        reply += `Ask them: @splitpe register ${paidBy} their@upi\n`;
     }
 
     reply += `━━━━━━━━━━━━━━\n`;
