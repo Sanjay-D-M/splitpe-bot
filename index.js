@@ -159,16 +159,18 @@ client.on('ready', () => {
 async function handleHelp(msg) {
     let reply = `👋 *Welcome to SplitPe!*\n`;
     reply += `━━━━━━━━━━━━━━\n\n`;
-    reply += `💸 *Split equally among all:*\n`;
+    reply += `💸 *Split among everyone:*\n`;
     reply += `@splitpe ₹1240 Rahul paid dinner\n\n`;
-    reply += `👥 *Split with specific people only:*\n`;
+    reply += `👥 *Split with specific people:*\n`;
     reply += `@splitpe ₹1240 Rahul paid dinner @Sneha @Aditya\n\n`;
+    reply += `🚫 *Split everyone EXCEPT some people:*\n`;
+    reply += `@splitpe ₹1240 Rahul paid dinner -exclude @Priya @Kiran\n\n`;
     reply += `📊 *Check balances:*\n`;
     reply += `@splitpe balance\n\n`;
     reply += `📲 *Register your UPI ID:*\n`;
     reply += `@splitpe register Rahul rahul@okaxis\n\n`;
     reply += `━━━━━━━━━━━━━━\n`;
-    reply += `_Tip: Tag only the people who shared the expense_ ✌️`;
+    reply += `_Tip: In large groups, use -exclude to skip people who weren't part of the expense_ ✌️`;
 
     await msg.reply(reply);
 }
@@ -209,19 +211,15 @@ async function handleSplit(msg) {
     const groupName = chat.name || 'private';
     const body = msg.body.trim();
 
-    // Parse amount
+    // Parse core fields
     const amountMatch = body.match(/₹?(\d+)/);
     const paidMatch = body.match(/(\w+)\s+paid/i);
-    const reasonMatch = body.match(/paid\s+(.*?)(?:\s+@|$)/i);
+    const reasonMatch = body.match(/paid\s+(.*?)(?:\s+@|\s+-exclude|$)/i);
 
     if (!amountMatch || !paidMatch) {
         await msg.reply(
             `❌ Couldn't understand that.\n\n` +
-            `*Split equally in group:*\n` +
-            `@splitpe ₹1240 Rahul paid dinner\n\n` +
-            `*Split with specific people:*\n` +
-            `@splitpe ₹1240 Rahul paid dinner @Sneha @Aditya\n\n` +
-            `Type *@splitpe help* for all commands.`
+            `Type *@splitpe help* to see all commands.`
         );
         return;
     }
@@ -230,30 +228,62 @@ async function handleSplit(msg) {
     const paidBy = paidMatch[1];
     const reason = reasonMatch ? reasonMatch[1].trim() : 'expense';
 
-    // Check if specific people are tagged
-    const taggedPeople = [...body.matchAll(/@(\w+)/g)]
+    // Check for -exclude flag
+    const excludeMatch = body.match(/-exclude\s+(.*)/i);
+    const excludeNames = excludeMatch
+        ? [...excludeMatch[1].matchAll(/@(\w+)/g)].map(m => m[1].toLowerCase())
+        : [];
+
+    // Check for tagged people (include mode)
+    // Only count tags that appear BEFORE -exclude
+    const bodyBeforeExclude = excludeMatch
+        ? body.substring(0, body.indexOf('-exclude'))
+        : body;
+
+    const taggedPeople = [...bodyBeforeExclude.matchAll(/@(\w+)/g)]
         .map(m => m[1])
-        .filter(name => name.toLowerCase() !== 'splitpe'); // exclude the bot mention
+        .filter(name => name.toLowerCase() !== 'splitpe');
+
+    // Get bot's own number to exclude it
+    const botNumber = client.info?.wid?.user;
+
+    // Get all participants
+    const participants = chat.participants || [];
+    const humanParticipants = participants.filter(p => {
+        const num = p.id?.user;
+        return num !== botNumber;
+    });
 
     let splitNames = [];
     let count = 0;
+    let mode = '';
 
-    if (taggedPeople.length > 0) {
-        // Use tagged people only
+    if (taggedPeople.length > 0 && excludeNames.length === 0) {
+        // MODE 1: Only tagged people
         splitNames = taggedPeople;
-        count = taggedPeople.length;
+        count = splitNames.length;
+        mode = 'include';
+
+    } else if (excludeNames.length > 0 && taggedPeople.length === 0) {
+        // MODE 2: Everyone except excluded
+        // We have participant objects but not display names easily
+        // So track by exclude list
+        excludeNames.push('splitpe'); // always exclude bot
+        splitNames = []; // we'll just use count
+        count = Math.max(humanParticipants.length - excludeNames.length, 1);
+        mode = 'exclude';
+
+    } else if (taggedPeople.length > 0 && excludeNames.length > 0) {
+        // MODE 3: Tagged people minus excluded (edge case)
+        splitNames = taggedPeople.filter(n => !excludeNames.includes(n.toLowerCase()));
+        count = splitNames.length;
+        mode = 'include';
+
     } else {
-        // Use all group participants except the bot
-        const participants = chat.participants || [];
-        const botNumber = client.info?.wid?.user;
-
-        const humanParticipants = participants.filter(p => {
-            const num = p.id?.user;
-            return num !== botNumber;
-        });
-
-        count = humanParticipants.length || 2;
-        splitNames = []; // we don't have names, just count
+        // MODE 4: Everyone in group
+        count = Math.max(humanParticipants.length, 2);
+        splitNames = [];
+        mode = 'all';
     }
 
     const perPerson = Math.ceil(amount / count);
@@ -269,21 +299,22 @@ async function handleSplit(msg) {
     let reply = `⚡ *SplitPe*\n`;
     reply += `━━━━━━━━━━━━━━\n`;
     reply += `📋 *${reason.toUpperCase()}* — ₹${amount}\n`;
+    reply += `👥 Split ${count} ways = *₹${perPerson} each*\n`;
 
-    if (splitNames.length > 0) {
-        reply += `👥 Split ${count} ways = *₹${perPerson} each*\n`;
-        reply += `━━━━━━━━━━━━━━\n`;
-        reply += `✅ *${paidBy}* paid — collects ₹${amount - perPerson}\n\n`;
+    if (mode === 'exclude' && excludeNames.length > 0) {
+        const displayExcluded = excludeMatch[1].replace(/@/g, '').trim();
+        reply += `🚫 Excluded: ${displayExcluded}\n`;
+    }
+
+    reply += `━━━━━━━━━━━━━━\n`;
+    reply += `✅ *${paidBy}* paid — collects ₹${amount - perPerson}\n\n`;
+
+    if (mode === 'include' && splitNames.length > 0) {
         reply += `💸 *Each person owes ₹${perPerson}:*\n`;
         splitNames
             .filter(n => n.toLowerCase() !== paidBy.toLowerCase())
-            .forEach(name => {
-                reply += `  • ${name}\n`;
-            });
+            .forEach(name => { reply += `  • ${name}\n`; });
     } else {
-        reply += `👥 Split ${count} ways = *₹${perPerson} each*\n`;
-        reply += `━━━━━━━━━━━━━━\n`;
-        reply += `✅ *${paidBy}* paid — collects ₹${amount - perPerson}\n\n`;
         reply += `💸 *Everyone owes ₹${perPerson} each*\n`;
     }
 
